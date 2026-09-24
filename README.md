@@ -142,7 +142,7 @@ The bridge doesn't care which agent does the work — it speaks to a provider, a
 | `grok` | `grok -p` (official Grok Build CLI) | **Calls xAI's cloud**, unlike `grok-local` (local LM Studio). Needs the CLI's OAuth login; supports `--resume`, `--rules`, `--allow`. |
 | `zcode` | `zcode-local -p` | Plain-text one-shot; the bridge's `permissionMode` maps to `--mode build\|edit\|plan\|yolo`. Supports `--resume`. |
 | `harness` | `ch run <prompt> --print` | Custom-Code-Harness one-shot; optional `harnessProvider` selects its provider. |
-| `hermes` | `hermes -z` | Hermes agent one-shot, plain text; the session id is recovered from `--usage-file` so `--resume` keeps working. Experimental — a live smoke test needs a model loaded and none was available during testing. |
+| `hermes` | `hermes -z` | Hermes agent one-shot, plain text; the session id is recovered from `--usage-file` so `--resume` keeps working. Verified live 2026-09-24: answered OK through NVIDIA NIM (default muse-glimmer-30b), no local model needed. |
 | `openclaw` | `openclaw agent --local -m` | OpenClaw one-shot against the local model; supports `--session-id` resume. Verified live on Windows (`openclaw agent --local -m "Reply with exactly: OK"` → `OK`); on the Mac it may need its plugin issues resolved first (a stale discord plugin blocked the CLI there). |
 | `codex` | `codex exec --json` | OpenAI Codex CLI; JSONL events are parsed (session, text, progress, errors). Supports `exec resume --json`. |
 | `gemini` | `gemini --output-format stream-json -p` | Google Gemini CLI; stream-json events are parsed. No resume (the CLI's `--resume` targets the latest/latest-index session only). |
