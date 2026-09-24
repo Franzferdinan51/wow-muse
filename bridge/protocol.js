@@ -17,7 +17,7 @@ function slotNumber(id, slots) { return ((id - 1) % slots) + 1; }
 
 // A chat as the bridge tracks it: the addon's session token plus the chat id.
 function chatKey(job) { return `${job.session || ''}:${job.chat || 'default'}`; }
-// Claude sessions are keyed by chat id alone, which survives an addon data reset.
+// Muse sessions are keyed by chat id alone, which survives an addon data reset.
 function sessKey(job) { return job.chat ? 'chat:' + job.chat : chatKey(job); }
 
 // ---------------------------------------------------------------------------
@@ -72,18 +72,21 @@ function resolveCwd(raw, base) {
   let p = String(raw || '').trim();
   if (!p) return base;
   if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) p = path.join(os.homedir(), p.slice(1));
+  // A Windows drive-letter path is absolute even when the bridge runs elsewhere.
+  if (/^[A-Za-z]:([\\/]|$)/.test(p)) return path.win32.resolve(p);
   return path.resolve(base, p);
 }
 
 function sameFolder(a, b) {
-  return path.resolve(a || '').toLowerCase() === path.resolve(b || '').toLowerCase();
+  const norm = s => path.resolve(s || '').toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+  return norm(a) === norm(b);
 }
 
 // ---------------------------------------------------------------------------
 // In: what the game sends
 // ---------------------------------------------------------------------------
 
-// Flags field: ';'-separated tokens. "n" = fresh Claude session, "h" = hello
+// Flags field: ';'-separated tokens. "n" = fresh Muse session, "h" = hello
 // (no prompt), "d" = the player deleted this chat: forget its transcript and
 // session (no prompt), "allow=Rule1,Rule2" = add these permission rules before
 // running, "c" = the record carries a game-context field before the text (an
@@ -147,18 +150,18 @@ function parseOutbox(src) {
 // Game context
 // ---------------------------------------------------------------------------
 
-// What Claude is told about where the message comes from, appended to its
+// What Muse is told about where the message comes from, appended to its
 // system prompt on every run while the addon has sent a context (the player's
-// character, location and so on; see GameContext in WoWClaude.lua), plus the
+// character, location and so on; see GameContext in WoWMuse.lua), plus the
 // addon/macro primer (docs/WOW-ADDON-PRIMER.md) so it can write for this
 // client whatever folder the chat works in. Empty context = nothing appended,
 // primer included, so a bridge used for unrelated projects, or an addon with
-// `/wow-claude context off`, leaves Claude exactly as it was.
+// `/wow-muse context off`, leaves Muse exactly as it was.
 function systemPrompt(ctx, primer) {
   const text = String(ctx || '').trim();
   if (!text) return '';
   const lines = [
-    'The user is talking to you from inside World of Warcraft through the wow-claude addon. They type in a small in-game window and your reply is shown there as plain text (markdown is not rendered), so keep replies compact and formatting simple.',
+    'The user is talking to you from inside World of Warcraft through the wow-muse addon. They type in a small in-game window and your reply is shown there as plain text (markdown is not rendered), so keep replies compact and formatting simple.',
     '',
     'Their in-game situation when the message was written, as reported by the addon:',
     text,
@@ -191,11 +194,14 @@ function ruleFor(d) {
 // One progress line per tool call, as shown in the game's "working" bubble.
 function describeToolUse(block) {
   const inp = block.input || {};
+  // Basename that understands both separators: agent file paths are Windows
+  // style even when the bridge runs elsewhere.
+  const base = p => String(p || '').split(/[\\/]/).pop();
   switch (block.name) {
     case 'Bash': return `$ ${String(inp.command || '').split('\n')[0].slice(0, 110)}`;
-    case 'Read': return `read ${path.basename(inp.file_path || '')}`;
-    case 'Edit': return `edit ${path.basename(inp.file_path || '')}`;
-    case 'Write': return `write ${path.basename(inp.file_path || '')}`;
+    case 'Read': return `read ${base(inp.file_path)}`;
+    case 'Edit': return `edit ${base(inp.file_path)}`;
+    case 'Write': return `write ${base(inp.file_path)}`;
     case 'Grep': return `grep ${inp.pattern || ''}`;
     case 'Glob': return `glob ${inp.pattern || ''}`;
     case 'Agent': return `agent: ${inp.description || ''}`;
@@ -225,7 +231,7 @@ function luaStr(s) {
 function luaTable(globalName, records, opts = {}) {
   const now = opts.now || Date.now();
   const lines = [
-    '-- Written by the wow-claude bridge (bridge/bridge.js). Do not edit by hand.',
+    '-- Written by the wow-muse bridge (bridge/bridge.js). Do not edit by hand.',
     `${globalName} = {`,
     `\tts = ${luaStr(new Date(now).toISOString())},`,
     `\tnow = ${Math.floor(now / 1000)},`,

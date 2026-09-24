@@ -56,7 +56,7 @@ test('systemPrompt wraps the game context and is empty without one', () => {
   assert.equal(P.systemPrompt('  \n '), '');
   assert.equal(P.systemPrompt(undefined), '');
   const s = P.systemPrompt('Game: World of Warcraft: Forever\nCharacter: Testchar, level 23 Hunter');
-  assert.ok(s.includes('wow-claude addon'));
+  assert.ok(s.includes('wow-muse addon'));
   assert.ok(s.includes('\nGame: World of Warcraft: Forever\nCharacter: Testchar, level 23 Hunter\n'));
   assert.ok(s.includes('Linked from the game'));
   assert.ok(!s.includes('Reference for writing addons'), 'no primer section without a primer');
@@ -87,11 +87,11 @@ test('jobsFromStrip handles several records per frame and older formats', () => 
 
 test('parseOutbox decodes the SavedVariables fallback', () => {
   const hex = s => Buffer.from(s, 'utf8').toString('hex');
-  const src = `WoWClaudeDB = {\n["outbox"] = {\n["id"] = 7,\n["session"] = "abc123",\n["chat"] = "c1",\n["text"] = "${hex('héllo')}",\n["cwd"] = "${hex('realms')}",\n["newSession"] = true,\n},\n["settings"] = {},\n}`;
+  const src = `WoWMuseDB = {\n["outbox"] = {\n["id"] = 7,\n["session"] = "abc123",\n["chat"] = "c1",\n["text"] = "${hex('héllo')}",\n["cwd"] = "${hex('realms')}",\n["newSession"] = true,\n},\n["settings"] = {},\n}`;
   assert.deepEqual(P.parseOutbox(src), { id: 7, session: 'abc123', chat: 'c1', text: 'héllo', cwd: 'realms', newSession: true, via: 'reload' });
   const withCtx = src.replace('["newSession"]', `["ctx"] = "${hex('Character: Testchar')}",\n["newSession"]`);
   assert.equal(P.parseOutbox(withCtx).ctx, 'Character: Testchar');
-  assert.equal(P.parseOutbox('WoWClaudeDB = {}'), null);
+  assert.equal(P.parseOutbox('WoWMuseDB = {}'), null);
   assert.equal(P.parseOutbox('["outbox"] = { ["text"] = "" }'), null);
 });
 
@@ -103,7 +103,7 @@ test('resolveCwd: empty is the default, relative joins it, ~ is home, absolute w
   assert.equal(P.resolveCwd('./realms/', base), path.join(base, 'realms'));
   assert.equal(P.resolveCwd('../other', base), path.resolve(base, '..', 'other'));
   assert.equal(P.resolveCwd('~/x', base), path.join(os.homedir(), 'x'));
-  assert.equal(P.resolveCwd('D:\\elsewhere', base), path.resolve('D:\\elsewhere'));
+  assert.equal(P.resolveCwd('D:\\elsewhere', base), 'D:\\elsewhere');
   assert.ok(P.sameFolder('C:\\A\\b\\', 'c:/a/B'));
   assert.ok(!P.sameFolder('C:\\a', 'C:\\a\\b'));
 });

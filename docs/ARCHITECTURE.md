@@ -5,17 +5,17 @@ Two processes that can't talk to each other directly, and how they do anyway.
 ```
    WoW client (Lua sandbox)                        bridge.js (Node, same machine)
    ┌──────────────────────────┐                    ┌─────────────────────────────┐
-   │ WoWClaude addon         │  pixels on screen  │ capture.ps1 (PowerShell)    │
+   │ WoWMuse addon         │  pixels on screen  │ capture.ps1 (PowerShell)    │
    │  draws message strip ────┼───────────────────▶│  screen-captures the corner │
    │                          │                    │  decodes → {session,chat,id,│
    │                          │                    │            cwd,flags,name,  │
    │                          │                    │            text}            │
    │                          │                    │        │                    │
    │                          │                    │        ▼                    │
-   │                          │                    │  claude -p (per chat,       │
+   │                          │                    │  agent backend (per chat,   │
    │                          │                    │   parallel, --resume)       │
    │                          │                    │        │                    │
-   │  LoadAddOn(WoWClaude_S…)│  files on disk     │        ▼                    │
+   │  LoadAddOn(WoWMuse_S…)│  files on disk     │        ▼                    │
    │  ◀───────────────────────┼────────────────────┤  writes 200 slot Inbox.lua  │
    │  PlaySoundFile(sig/…)    │                    │  flips signal/heartbeat wav │
    └──────────────────────────┘                    └─────────────────────────────┘
@@ -48,8 +48,8 @@ session \x1F chat \x1F id \x1F cwd \x1F flags \x1F name \x1F [context \x1F] text
 ```
 
 - `session` — a random token generated when the addon's saved data is created. Message ids restart if the client wipes saved data; the bridge dedups on `(session, id)`.
-- `flags` — `n` = start a fresh Claude session; `h` = hello (announce the session token, no prompt); `d` = the chat was deleted in game: drop its transcript and Claude session, no prompt (the addon keeps the id in `db.forget` and resends it with each hello until the bridge acks); `c` = a game-context field sits between `name` and `text`; `allow=Rule1,Rule2` = add permission rules before running.
-- `context` — only present with the `c` flag (so a separator inside the text can't be mistaken for it): a few lines about the game, character, zone, map coordinates, money, talents and professions (`WoWClaude.GameContext()`, capped at 700 bytes; since coordinates change as you move, most messages sent after walking somewhere carry a fresh copy). Every hello carries it (empty when `/wow-claude context off`); a message carries it only when it differs from the last version the bridge acknowledged, and only if it fits next to the text.
+- `flags` — `n` = start a fresh agent session; `h` = hello (announce the session token, no prompt); `d` = the chat was deleted in game: drop its transcript and agent session, no prompt (the addon keeps the id in `db.forget` and resends it with each hello until the bridge acks); `c` = a game-context field sits between `name` and `text`; `allow=Rule1,Rule2` = add permission rules before running.
+- `context` — only present with the `c` flag (so a separator inside the text can't be mistaken for it): a few lines about the game, character, zone, map coordinates, money, talents and professions (`WoWMuse.GameContext()`, capped at 700 bytes; since coordinates change as you move, most messages sent after walking somewhere carry a fresh copy). Every hello carries it (empty when `/wow-muse context off`); a message carries it only when it differs from the last version the bridge acknowledged, and only if it fits next to the text.
 - `text` — the message. Item, spell and quest links the player shift-clicked in (`|Hitem:2140:…|h[Fine Longsword]|h`) are expanded before sending: `[Fine Longsword]` stays in the text and the link's tooltip, read off a hidden `GameTooltip` via `SetHyperlink`, is appended in a `--- Linked from the game ---` block.
 
 The strip stays up until the bridge acknowledges the message (see signals) or 40 s pass, then it is re-shown up to three times before the addon gives up on pixels and arms the reload fallback for that message.
@@ -60,21 +60,21 @@ Exclusive fullscreen blocks GDI capture; borderless/windowed works. HDR was not 
 
 ## Inbound: load-on-demand slots
 
-`install-slots.js` creates `WoWClaude_S001` … `WoWClaude_S200`, each a `## LoadOnDemand: 1` addon with a single `Inbox.lua`. `C_AddOns.LoadAddOn` reads that file from disk at load time; each slot can be loaded once per UI session, and `/reload` unloads them all.
+`install-slots.js` creates `WoWMuse_S001` … `WoWMuse_S200`, each a `## LoadOnDemand: 1` addon with a single `Inbox.lua`. `C_AddOns.LoadAddOn` reads that file from disk at load time; each slot can be loaded once per UI session, and `/reload` unloads them all.
 
 The bridge doesn't know which slot the game will load next, so every publish writes the same content to all 200 (atomic rename per file, ~1 MB total, cheap). The content is the latest status of every chat:
 
 ```lua
-WoWClaude_SlotData = {
+WoWMuse_SlotData = {
   ts = "...", now = <bridge epoch seconds>,
-  replies = { { chat = "...", id = 12, status = "working"|"done"|"error", text = "...", cwd = "...", session = "<claude session id>", denied = { "WebSearch" } }, … },
+  replies = { { chat = "...", id = 12, status = "working"|"done"|"error", text = "...", cwd = "...", session = "<agent session id>", denied = { "WebSearch" } }, … },
   restore = { token = "...", chats = { … } },   -- only right after a saved-data reset
 }
 ```
 
 The addon loads a fresh slot on a schedule after each send (5, 10, 16, 24, 34, 46, 60, 80, 100, 130, 160, 200, 240, 300 s, then every 60 s) or immediately when the readiness signal fires. A slot poll matches replies by `(chat, id)` against each chat's pending message. `now` lets the addon know when the bridge last wrote anything (the two clocks are the same machine).
 
-The same content is written to `WoWClaude/Inbox.lua`, which the game reads on `/reload` — the fallback path and the only path in `mode reload`.
+The same content is written to `WoWMuse/Inbox.lua`, which the game reads on `/reload` — the fallback path and the only path in `mode reload`.
 
 ## Signals: the empty-wav trick
 
@@ -84,11 +84,11 @@ The same content is written to `WoWClaude/Inbox.lua`, which the game reads on `/
 |---|---|
 | `sig/NNN.wav` | reply NNN is ready → load a slot now instead of waiting for the schedule |
 | `ack/NNN.wav` | the bridge received message NNN → take it off the strip |
-| `act/NNN/kk.wav` | Claude's k-th action on message NNN → live "14 actions, last 6 s ago" without spending a slot |
+| `act/NNN/kk.wav` | the agent's k-th action on message NNN → live "14 actions, last 6 s ago" without spending a slot |
 | `presence/kkkk.wav` | every 30 s while the bridge runs → the status light; the bridge keeps the 50 files ahead of its counter empty so the addon can't run ahead |
 | `ctl/empty.wav`, `ctl/valid.wav` | never change; at login the addon checks that empty reads as unplayable and valid as playable, and disables the whole mechanism if not |
 
-`NNN = ((id − 1) mod 200) + 1`. A raised file stays playable for the rest of the client process even if the bridge empties it again, so every consumer treats an unexpected "already valid" as unreliable and falls back to slot polling. With the sound channel off, the addon still works: replies come from the scheduled slot polls, and while idle it spends one slot every 10 minutes to keep the status light honest. The light's timing follows the mode: with beats the bridge is heard from every 30 s, so 90 s of silence is "stale" and 5 minutes is "down"; without them the only evidence is that 10-minute idle poll, so the windows are 12 and 22 minutes instead (`/wow-claude diag` shows which mode is active). Some clients report an empty file as playable — the self-test catches that and the addon runs in this slot-only mode for the whole session.
+`NNN = ((id − 1) mod 200) + 1`. A raised file stays playable for the rest of the client process even if the bridge empties it again, so every consumer treats an unexpected "already valid" as unreliable and falls back to slot polling. With the sound channel off, the addon still works: replies come from the scheduled slot polls, and while idle it spends one slot every 10 minutes to keep the status light honest. The light's timing follows the mode: with beats the bridge is heard from every 30 s, so 90 s of silence is "stale" and 5 minutes is "down"; without them the only evidence is that 10-minute idle poll, so the windows are 12 and 22 minutes instead (`/wow-muse diag` shows which mode is active). Some clients report an empty file as playable — the self-test catches that and the addon runs in this slot-only mode for the whole session.
 
 ## Bridge
 
@@ -96,10 +96,12 @@ The same content is written to `WoWClaude/Inbox.lua`, which the game reads on `/
 
 - **Inputs:** capture lines; the SavedVariables outbox (fallback, written on `/reload`); `--inject` for tests.
 - **Dedup:** `state.handled[session]` is a set of ids; older single-number state is migrated.
-- **Folders:** the default folder is `--project`, else the folder the bridge was started from (the `wow-claude` command, see README), else `defaultCwd` in the config; it is reported to the addon as `cwd` in every slot file. A chat's folder is resolved against it (`realms` → `<default>\realms`; empty = the default). Claude keeps sessions per project folder, so `state.json` remembers the folder each session ran in and a chat that changed folder starts a new session.
-- **Jobs:** one Claude process per chat, up to `maxParallel` at once, queued per chat beyond that. `claude -p --output-format stream-json --verbose --permission-mode … --allowedTools … [--resume <id>]`, prompt on stdin. Tool-use events become progress lines (`edit player.gd`, `$ npm test`) and heartbeat files; the final `result` becomes the reply. Claude session ids are stored per chat id in `state.json`, so `--resume` survives an addon data reset.
+- **Folders:** the default folder is `--project`, else the folder the bridge was started from (the `wow-muse` command, see README), else `defaultCwd` in the config; it is reported to the addon as `cwd` in every slot file. A chat's folder is resolved against it (`realms` → `<default>\realms`; empty = the default). Agent CLIs keep sessions per project folder, so `state.json` remembers the folder each session ran in and a chat that changed folder starts a new session.
+- **Jobs:** one agent process per chat, up to `maxParallel` at once, queued per chat beyond that. The provider registry (`bridge/providers.js`) builds the command line per backend: Claude Code keeps its original `claude -p --output-format stream-json --verbose --permission-mode … --allowedTools … [--resume <id>]` with the prompt on stdin; Meta Muse gets the prompt as a temp file (`muse exec --json … --prompt-file`); grok-local, ZCode and `ch` take it as an argument and print plain text; LM Studio / generic HTTP get `POST /v1/chat/completions`. Tool-use events (or output lines) become progress lines (`edit player.gd`, `$ npm test`) and heartbeat files; the final result becomes the reply. Session ids are stored per chat id in `state.json` for providers that support resume, so `--resume` survives an addon data reset.
 - **Permissions:** `permission_denials` in the result are turned into allowlist rules (`Bash(<first word>:*)` or the tool name) and sent along as `denied`; an `allow=` flag on a later message merges them into `config.json`.
-- **Game context:** the latest context field received is kept in `state.json` (`context`), an empty one clears it. While one is held and `gameContext` in the config isn't `false`, every run gets `--append-system-prompt` with `protocol.systemPrompt(context, primer)`: a short note that the user is in WoW talking through the addon, the context lines, what the `[Name]` links and the "Linked from the game" block mean, and the addon/macro primer (`primerFile`, default `docs/WOW-ADDON-PRIMER.md`, read fresh each run). No context, nothing appended, primer included.
+- **Provider selection:** per turn, in this order: (1) the SystemOne router's advisory tier → `systemone.tierMap` (see below), (2) the `provider` block in the config, (3) explicit user config. The default is `muse`, with a logged fallback to `claude` when the Muse CLI isn't installed. A routed or explicit choice is honored as-is. Output handling follows the provider's `outputMode`: `stream-json` (Claude Code's event protocol), `jsonl-text` (Muse CLI, parsed best-effort in `bridge/output.js`), or plain `text` (grok-local, ZCode, `ch`), and `http` for the OpenAI-compatible endpoints (`runHttpJob` POSTs `/v1/chat/completions` with Node's built-in `http`/`https`, no dependencies). No model IDs are hard-coded anywhere: the model always comes from the router decision or the config.
+- **SystemOne routing:** optional and advisory. During an active turn only, `bridge/systemone.js` POSTs `{task}` to the router shim (`systemone.host`/`port`, default `127.0.0.1:8765`) and maps `route.tier` through `systemone.tierMap` to a `{provider, model}`. Any timeout (default 3000 ms), error, or unmapped tier logs one line and continues with the configured provider — fail-open. The router is never asked to load, unload, or switch models.
+- **Game context:** the latest context field received is kept in `state.json` (`context`), an empty one clears it. While one is held and `gameContext` in the config isn't `false`, every run gets the system prompt from `protocol.systemPrompt(context, primer)` (as `--append-system-prompt` for Claude, prepended to the prompt file / HTTP system message for the others): a short note that the user is in WoW talking through the addon, the context lines, what the `[Name]` links and the "Linked from the game" block mean, and the addon/macro primer (`primerFile`, default `docs/WOW-ADDON-PRIMER.md`, read fresh each run). No context, nothing appended, primer included.
 - **Transcripts:** every prompt and reply is appended to `transcripts.json` per chat. The first message from an unknown session token means the addon's saved data is fresh, so the next three publishes carry a `restore` bundle (up to 16 chats, 40 messages each) addressed to that token; the addon imports chats it doesn't have.
 - **Publishing:** final results immediately; progress throttled to one write per 3 s.
 
@@ -107,19 +109,19 @@ The same content is written to `WoWClaude/Inbox.lua`, which the game reads on `/
 
 ## Addon
 
-`WoWClaude.lua` is a single file; sections in order: helpers, reload fallback, pixel strip, signals and slots, game context and links, sending, chats, rendering, UI, slash commands, events. `tests/addon_test.js` runs it in a Lua VM with a stub client (`tests/wow_stub.lua`) through a whole session: login, hello, a message decoded off the strip, a slot reply, Allow, restore.
+`WoWMuse.lua` is a single file; sections in order: helpers, reload fallback, pixel strip, signals and slots, game context and links, sending, chats, rendering, UI, slash commands, events. `tests/addon_test.js` runs it in a Lua VM with a stub client (`tests/wow_stub.lua`) through a whole session: login, hello, a message decoded off the strip, a slot reply, Allow, restore.
 
 - **Chats:** `db.chats[]` with id, name, cwd, history, pendingId, unread, draft. A chat named `Chat N` takes its title from the first message. Deleting the last chat resets it instead.
 - **Transcript:** a scroll frame of message bubbles (accent bar + colored label per role, timestamp, wrapped body); clicking a message opens a copy box, since FontStrings can't be selected. The working bubble shows elapsed time, heartbeat counts and the latest progress lines.
 - **Windows:** main frame (a minimize button and Esc collapse it to the mini bar; Esc is caught in `OnHide` unless the whole UI is hiding), a mini bar with the status light and unread/working badge, a rename `StaticPopup`.
 - **Game context and links:** `GameContext()` asks the client about the build, character, zone, money, talents and skill lines, each call wrapped so a missing API just leaves its line out. `ExpandLinks()` rewrites `|H…|h[Name]|h` links in a message before it is sent (see the record format above). Shift-clicked links reach the addon's input box through a `hooksecurefunc` on `ChatFrameUtil.InsertLink` (the Forever client uses the modern chat code; every shift-click, from bags, spellbook or quest log, ends there; the old `ChatEdit_InsertLink` global is hooked instead only where the new one is missing), which only inserts when that box has keyboard focus, so shift-click elsewhere keeps its normal meaning.
-- **Game chat:** replies are printed line by line under `[Claude · name]` with `[reply]`/`[open]` hyperlinks (`|Hclaude:…|h`, handled via `hooksecurefunc("SetItemRef")`). `/ai` sends from the chat box. `/r` is handled by wrapping `ProcessChatType`, `SendMessage` and `SendText` on each chat edit box: when Claude was the last messenger, the box shows a repainted "To Claude [name]:" header and Enter routes to Claude with the box cleared first, so the game never sends anything; the underlying chat type is untouched, and `UpdateHeader`/`ClearChat` hooks end Claude mode on Tab, `/s`, Esc or a real incoming whisper.
+- **Game chat:** replies are printed line by line under `[Muse · name]` with `[reply]`/`[open]` hyperlinks (`|Hmuse:…|h`, handled via `hooksecurefunc("SetItemRef")`). `/ai` sends from the chat box. `/r` is handled by wrapping `ProcessChatType`, `SendMessage` and `SendText` on each chat edit box: when the agent was the last messenger, the box shows a repainted "To Muse [name]:" header and Enter routes to the agent with the box cleared first, so the game never sends anything; the underlying chat type is untouched, and `UpdateHeader`/`ClearChat` hooks end agent mode on Tab, `/s`, Esc or a real incoming whisper.
 - **Reload fallback:** `ReloadUI()` needs a hardware event, so "auto" reload is a hidden keyboard-capturing frame with `SetPropagateKeyboardInput(true)` that reloads on the player's next keypress once the interval has elapsed. Only armed when pixels or slots can't work.
 
 ## Limits and known issues
 
 - The client's saved-data wipe (observed on the beta) is outside the addon's control; recovery depends on the bridge having been running.
-- 200 slots per UI session. Each reply costs one slot when the readiness signal works, about four otherwise; `/wow-claude reload` resets the pool.
+- 200 slots per UI session. Each reply costs one slot when the readiness signal works, about four otherwise; `/wow-muse reload` resets the pool.
 - A raised signal file stays "valid" in the client until a full restart, so slot numbers that wrap around (every 200 messages) lose the cheap signals until then. Self-detected.
 - Message capacity ≈ 3.2 KB per send; longer text is refused with a hint.
 - Replies are published in full (a ~3 KB message can produce a 60 KB reply; that is fine for a slot file). The bridge-side transcript keeps the first 4000 characters of each message, and a restore sends back the last 40 messages per chat at 2000 characters each.

@@ -21,11 +21,11 @@ assignees: ''
 - Display mode (windowed / borderless / exclusive fullscreen):
 - Node.js version (`node -v`):
 - Claude Code version (`claude --version`):
-- wow-claude version or commit:
+- wow-muse version or commit:
 
 **Diagnostics**
 
-Output of `/wow-claude diag` in game:
+Output of `/wow-muse diag` in game:
 
 ```
 ```

@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 'use strict';
-// WoW Claude bridge: the half of WoWClaude that lives outside the game.
+// WoW Muse bridge: the half of WoWMuse that lives outside the game.
 //
 //   OUT  capture.ps1 screen-captures the addon's pixel strip -> one or more
 //        {session, chat, id, cwd, flags, text} records per frame
 //        (fallback: the game's SavedVariables file, written on /reload)
-//   RUN  `claude -p` headless in the chat's folder, streaming progress.
-//        Each chat is its own Claude session; up to maxParallel run at once.
+//   RUN  an agent backend headless in the chat's folder, streaming progress.
+//        Each chat is its own agent session; up to maxParallel run at once.
+//        Backends are pluggable (bridge/providers.js): Meta Muse, grok-local,
+//        ZCode, the Custom-Code-Harness `ch` CLI, Claude Code, or any
+//        OpenAI-compatible HTTP endpoint (LM Studio preset included).
+//        SystemOne can route each task to a tier first (bridge/systemone.js).
 //   IN   we write the latest reply/status of every chat into every
-//        WoWClaude_S### slot addon (the game loads a fresh one from a timer),
+//        WoWMuse_S### slot addon (the game loads a fresh one from a timer),
 //        flip a signal .wav per message, and also write Inbox.lua for the
 //        reload path.
 //
@@ -17,9 +21,9 @@
 //   --inject "text"   pretend the strip said this and exit when done
 //   --project <dir>   default folder for chats that haven't picked one
 //
-// Like `claude` itself, the bridge works in the folder it was started from:
-// `cd my-project && wow-claude` makes my-project the default for every chat
-// that hasn't chosen its own with /wow-claude cd. Started from inside this repo (npm
+// Like an agent CLI itself, the bridge works in the folder it was started from:
+// `cd my-project && wow-muse` makes my-project the default for every chat
+// that hasn't chosen its own with /wow-muse cd. Started from inside this repo (npm
 // start), it falls back to defaultCwd in config.json.
 
 const fs = require('fs');
@@ -28,6 +32,9 @@ const path = require('path');
 const readline = require('readline');
 const { spawn } = require('child_process');
 const P = require('./protocol'); // the pure protocol code, unit-tested in tests/bridge_test.js
+const Providers = require('./providers'); // agent backend registry
+const SystemOne = require('./systemone'); // advisory task routing (fail-open)
+const Output = require('./output'); // pure backend output parsers
 
 const HERE = __dirname;
 const CONFIG_FILE = path.join(HERE, 'config.json');
@@ -36,15 +43,15 @@ const LOG_FILE = path.join(HERE, 'bridge.log');
 
 const argv = process.argv.slice(2);
 if (argv.includes('--help') || argv.includes('-h')) {
-  console.log('wow-claude [--project <dir>] [--once] [--inject "text"]\n\n' +
-    'Runs the WoW Claude bridge. Chats without a folder of their own work in <dir>,\n' +
+  console.log('wow-muse [--project <dir>] [--once] [--inject "text"]\n\n' +
+    'Runs the WoW Muse bridge. Chats without a folder of their own work in <dir>,\n' +
     'or in the folder you started it from, or in defaultCwd from bridge/config.json.');
   process.exit(0);
 }
 let cfg;
 try { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); }
 catch (e) {
-  console.error(`Cannot read ${CONFIG_FILE} (${e.message}).\nRun "node setup.js" in the wow-claude folder first.`);
+  console.error(`Cannot read ${CONFIG_FILE} (${e.message}).\nRun "node setup.js" in the wow-muse folder first.`);
   process.exit(2); // the supervisor doesn't restart on 2
 }
 const once = argv.includes('--once');
@@ -60,12 +67,14 @@ function insideRepo(dir) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 const projectIdx = argv.indexOf('--project');
+// WOW_CLAUDE_PROJECT is honored as a legacy alias for WOW_MUSE_PROJECT.
+const projectEnv = process.env.WOW_MUSE_PROJECT || process.env.WOW_CLAUDE_PROJECT;
 const DEFAULT_CWD = path.resolve(
   projectIdx >= 0 && argv[projectIdx + 1] ? argv[projectIdx + 1]
-    : process.env.WOW_CLAUDE_PROJECT ? process.env.WOW_CLAUDE_PROJECT
+    : projectEnv ? projectEnv
     : !insideRepo(process.cwd()) ? process.cwd()
     : cfg.defaultCwd || process.cwd());
-const DEFAULT_CWD_SOURCE = projectIdx >= 0 ? '--project' : process.env.WOW_CLAUDE_PROJECT ? 'WOW_CLAUDE_PROJECT'
+const DEFAULT_CWD_SOURCE = projectIdx >= 0 ? '--project' : projectEnv ? 'WOW_MUSE_PROJECT'
   : !insideRepo(process.cwd()) ? 'started here' : 'config.json';
 
 const resolveCwd = raw => P.resolveCwd(raw, DEFAULT_CWD);
@@ -143,7 +152,7 @@ function maybeOfferRestore(job) {
 }
 
 // The player deleted a chat in game. Drop everything we keep for it, so the next
-// restore doesn't bring it back and its id can't resume the old Claude session.
+// restore doesn't bring it back and its id can't resume the old agent session.
 function forgetChat(job) {
   if (!job.chat) return;
   const had = !!transcripts.chats[job.chat];
@@ -193,11 +202,22 @@ function atomicWrite(file, content) {
   fs.renameSync(tmp, file);
 }
 
-function resolveClaude() {
-  if (cfg.claudePath) return cfg.claudePath;
-  const local = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
-  if (fs.existsSync(local)) return local;
-  return 'claude';
+// Resolve the active provider for this run: SystemOne's advisory routing first
+// (router decision), then the tier map / config, then explicit user config.
+// The default provider is 'muse', with a logged fallback to 'claude' when the
+// muse CLI isn't installed, so existing setups keep working untouched.
+let providerFallbackNote = null;
+function resolveProviderId() {
+  const { id, note } = Providers.resolveId(cfg);
+  if (note && note !== providerFallbackNote) { providerFallbackNote = note; log('provider:', note); }
+  return id;
+}
+
+function providerModel(routed) {
+  // Selection order: router decision -> config -> explicit user config.
+  if (routed && routed.model) return routed.model;
+  const p = cfg.provider || {};
+  return p.model || cfg.model || '';
 }
 
 // ---------------------------------------------------------------------------
@@ -210,23 +230,23 @@ function slotFile(globalName, records) {
 }
 
 function addonInstalled() {
-  return fs.existsSync(path.join(cfg.addonDir, 'WoWClaude', 'WoWClaude.toc'));
+  return fs.existsSync(path.join(cfg.addonDir, 'WoWMuse', 'WoWMuse.toc'));
 }
 
 function slotsInstalled() {
-  return fs.existsSync(path.join(cfg.addonDir, 'WoWClaude_S001', 'Inbox.lua'));
+  return fs.existsSync(path.join(cfg.addonDir, 'WoWMuse_S001', 'Inbox.lua'));
 }
 
 // The game will load *some* unused slot next, so every slot gets the full picture.
 // A missing addon folder (not installed yet, or the game folder moved) must not
-// take the bridge down: capture and Claude runs keep working, and the game just
+// take the bridge down: capture and agent runs keep working, and the game just
 // won't see replies until `node setup.js` has run and WoW was restarted.
 let warnedNoAddon = false;
 function publishNow() {
   lastPublish = Date.now();
   const records = [...live.values()].slice(-30);
   try {
-    atomicWrite(cfg.inboxFile, slotFile('WoWClaude_Inbox', records));
+    atomicWrite(cfg.inboxFile, slotFile('WoWMuse_Inbox', records));
   } catch (e) {
     if (!warnedNoAddon) {
       warnedNoAddon = true;
@@ -235,9 +255,9 @@ function publishNow() {
     return;
   }
   if (!slotsInstalled()) return;
-  const body = slotFile('WoWClaude_SlotData', records);
+  const body = slotFile('WoWMuse_SlotData', records);
   for (let i = 1; i <= SLOTS; i++) {
-    try { atomicWrite(path.join(cfg.addonDir, 'WoWClaude_S' + pad3(i), 'Inbox.lua'), body); } catch {}
+    try { atomicWrite(path.join(cfg.addonDir, 'WoWMuse_S' + pad3(i), 'Inbox.lua'), body); } catch {}
   }
   // The restore bundle is large; it rides along once and is then dropped.
   // (The game keeps loading fresh slots until it has read one carrying it.)
@@ -245,7 +265,7 @@ function publishNow() {
 }
 
 // Final results publish immediately; progress is throttled. `key` is the chat
-// (record.session is Claude's session id, a different thing).
+// (record.session is the agent's session id, a different thing).
 function publish(key, record, urgent) {
   live.set(key, record);
   if (urgent) { if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; } publishNow(); return; }
@@ -255,7 +275,7 @@ function publish(key, record, urgent) {
 }
 
 function signal(kind, id, on) {
-  const file = path.join(cfg.addonDir, 'WoWClaude', kind, pad3(slotNumber(id)) + '.wav');
+  const file = path.join(cfg.addonDir, 'WoWMuse', kind, pad3(slotNumber(id)) + '.wav');
   try { atomicWrite(file, on ? SILENT_WAV : Buffer.alloc(0)); } catch {}
 }
 
@@ -264,7 +284,7 @@ function signal(kind, id, on) {
 // without spending a reply slot.
 const ACT_MAX = cfg.actMax || 60;
 function actFile(id, k) {
-  return path.join(cfg.addonDir, 'WoWClaude', 'act', pad3(slotNumber(id)), String(k).padStart(2, '0') + '.wav');
+  return path.join(cfg.addonDir, 'WoWMuse', 'act', pad3(slotNumber(id)), String(k).padStart(2, '0') + '.wav');
 }
 function resetBeats(id) {
   for (let k = 1; k <= ACT_MAX; k++) { try { atomicWrite(actFile(id, k), Buffer.alloc(0)); } catch {} }
@@ -281,10 +301,10 @@ function beat(job) {
 // files just ahead of the counter are kept empty so the game can't run ahead.
 const PRESENCE_MAX = cfg.presenceMax || 2000;
 function presenceFile(k) {
-  return path.join(cfg.addonDir, 'WoWClaude', 'presence', String(k).padStart(4, '0') + '.wav');
+  return path.join(cfg.addonDir, 'WoWMuse', 'presence', String(k).padStart(4, '0') + '.wav');
 }
 function presenceBeat() {
-  if (!fs.existsSync(path.join(cfg.addonDir, 'WoWClaude', 'presence'))) return;
+  if (!fs.existsSync(path.join(cfg.addonDir, 'WoWMuse', 'presence'))) return;
   state.presence = ((state.presence || 0) % PRESENCE_MAX) + 1;
   const k = state.presence;
   try { atomicWrite(presenceFile(k), SILENT_WAV); } catch {}
@@ -309,7 +329,7 @@ function readOutbox() {
 // The addon sends the player's in-game context (character, location, ...) with
 // its hello and again whenever it changes; an empty one means "context off".
 // It is kept in state.json so a restarted bridge still has it, and goes into
-// Claude's system prompt on every run (see protocol.systemPrompt).
+// The agent's system prompt on every run (see protocol.systemPrompt).
 function setContext(job) {
   const text = String(job.ctx || '').replace(/\r/g, '').trim().slice(0, 2000);
   const prev = (state.context && state.context.text) || '';
@@ -354,14 +374,14 @@ function allowRules(rules) {
 }
 
 // ---------------------------------------------------------------------------
-// Running Claude
+// Running the agent
 // ---------------------------------------------------------------------------
 
 function submit(job) {
   if (alreadyHandled(job)) return;
   if (job.ctx !== undefined) setContext(job);
   if (job.forget) {
-    // A deleted chat: forget it and ack. No Claude run.
+    // A deleted chat: forget it and ack. No agent run.
     markHandled(job);
     forgetChat(job);
     saveState();
@@ -370,7 +390,7 @@ function submit(job) {
   }
   if (job.hello) {
     // The addon announcing itself: ack, offer a restore if its data is fresh,
-    // and refresh the slots so it can read our clock. No Claude run.
+    // and refresh the slots so it can read our clock. No agent run.
     markHandled(job);
     saveState();
     signal('ack', job.id, true);
@@ -401,7 +421,7 @@ function drainQueue() {
   }
 }
 
-function runJob(job) {
+async function runJob(job) {
   const key = chatKey(job);
   const cwd = resolveCwd(job.cwd);
   job.cwd = cwd;
@@ -415,12 +435,12 @@ function runJob(job) {
     finish(job, 'error', `Folder does not exist: ${cwd}\n` +
       `Paths are relative to ${DEFAULT_CWD}.` +
       (sibs.length ? `\nFolders there: ${sibs.join(', ')}` : '') +
-      `\nUse /wow-claude cd <folder> to pick one, or /wow-claude cd alone for the default.`);
+      `\nUse /wow-muse cd <folder> to pick one, or /wow-muse cd alone for the default.`);
     return;
   }
   const skey = sessKey(job);
   if (job.newSession) { delete state.sessions[skey]; delete state.sessions[key]; }
-  // Claude keeps sessions per project folder, so a session can't follow a chat
+  // Agent CLIs keep sessions per project folder, so a session can't follow a chat
   // into another folder: start fresh there.
   const prevCwd = state.sessionCwd && state.sessionCwd[skey];
   if (prevCwd && !sameFolder(prevCwd, cwd) && state.sessions[skey]) {
@@ -433,23 +453,52 @@ function runJob(job) {
   }
   maybeOfferRestore(job);
   noteMessage(job, 'user', job.text);
-  const resume = state.sessions[skey] || state.sessions[key];
 
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', cfg.permissionMode || 'acceptEdits'];
-  if (Array.isArray(cfg.allowedTools) && cfg.allowedTools.length) args.push('--allowedTools', ...cfg.allowedTools);
-  if (cfg.model) args.push('--model', cfg.model);
-  if (resume) args.push('--resume', resume);
+  // Reserve the chat slot before the (async) routing call so a second submit
+  // for the same chat can't slip in while we wait.
+  running.set(key, { job, child: null });
+
+  // Provider selection: SystemOne advisory routing, then config, then explicit.
+  const routed = await SystemOne.routeTask(job.text, cfg.systemone, log);
+  const providerId = (routed && routed.provider) || resolveProviderId();
+  const prov = Providers.get(providerId);
+  if (!prov) {
+    running.delete(key);
+    finish(job, 'error', `Unknown provider '${providerId}'. Known: ${Providers.list().map(p => p.id).join(', ')}.`);
+    return;
+  }
+  const model = providerModel(routed);
   const sys = P.systemPrompt(gameContext(), primer());
-  if (sys) args.push('--append-system-prompt', sys);
+  const resume = (prov.supportsResume && (state.sessions[skey] || state.sessions[key])) || '';
 
-  const env = { ...process.env };
+  // HTTP providers (LM Studio, generic OpenAI-compatible) don't spawn a process.
+  if (prov.kind === 'http') {
+    runHttpJob(job, prov, { key, tag, cwd, model, sys });
+    return;
+  }
+
+  // Some CLIs take the prompt as a file (muse CLI); write it now, delete on close.
+  let promptFile = null;
+  if (prov.promptVia === 'promptFile') {
+    promptFile = path.join(os.tmpdir(), `wow-muse-prompt-${job.id}-${Date.now()}.txt`);
+    fs.writeFileSync(promptFile, (sys ? sys + '\n\n' : '') + job.text, 'utf8');
+  }
+
+  const args = prov.buildArgs({
+    text: job.text, systemPrompt: sys, resume, model,
+    allowedTools: cfg.allowedTools, permissionMode: cfg.permissionMode || 'acceptEdits',
+    promptFile, cwd, cfg,
+  });
+
+  const env = { ...process.env, ...(prov.extraEnv ? prov.extraEnv(cfg) : {}) };
   delete env.CLAUDECODE;
 
-  log(`${tag} (${job.via}) starting in ${cwd}${resume ? ' (resume ' + resume.slice(0, 8) + ')' : ' (new session)'}${sys ? ' [game context]' : ''}${running.size ? ' [' + (running.size + 1) + ' running]' : ''}`);
-  const child = spawn(resolveClaude(), args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  log(`${tag} (${job.via}) [${prov.id}] starting in ${cwd}${resume ? ' (resume ' + String(resume).slice(0, 8) + ')' : ' (new session)'}${sys ? ' [game context]' : ''}${model ? ` [model ${model}]` : ''}${running.size ? ' [' + running.size + ' running]' : ''}`);
+  const child = spawn(prov.command(cfg), args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   running.set(key, { job, child });
   publish(key, { chat: job.chat, id: job.id, status: 'working', text: resume ? 'thinking...' : 'starting a new session...', cwd, session: resume }, true);
-  child.stdin.end(job.text);
+  if (prov.promptVia === 'stdin') child.stdin.end(job.text);
+  else child.stdin.end();
 
   const progress = [];
   let sessionId = resume || '';
@@ -458,6 +507,9 @@ function runJob(job) {
   let denied = [];
   let stderr = '';
   let buffer = '';
+  let outText = '';   // outputMode 'text'
+  let museText = '';  // outputMode 'jsonl-text'
+  let lastChunk = '';
 
   const pushProgress = (line) => {
     progress.push(line);
@@ -468,26 +520,46 @@ function runJob(job) {
   // Long thinking stretches produce no tool events; keep the heartbeat alive anyway.
   const keepalive = setInterval(() => beat(job), 45000);
 
+  // stream-json: Claude Code's event protocol (unchanged from the original bridge).
   const handleEvent = (ev) => {
-    if (ev.session_id) sessionId = ev.session_id;
-    if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
-      for (const block of ev.message.content) {
-        if (block.type === 'tool_use') pushProgress(describeToolUse(block));
-        else if (block.type === 'text' && block.text && block.text.trim()) {
-          const snippet = block.text.trim().replace(/\s+/g, ' ');
-          pushProgress(snippet.length > 140 ? snippet.slice(0, 140) + '...' : snippet);
-        }
-      }
-    } else if (ev.type === 'result') {
-      isError = !!ev.is_error;
-      resultText = typeof ev.result === 'string' ? ev.result : JSON.stringify(ev.result ?? '', null, 2);
-      if (Array.isArray(ev.permission_denials) && ev.permission_denials.length) {
-        denied = [...new Set(ev.permission_denials.map(ruleFor))];
-        const list = ev.permission_denials.map(d => d.tool_name + (d.tool_input && d.tool_input.command ? ': ' + d.tool_input.command : '')).join('\n  ');
-        resultText += `\n\n[bridge] Claude needed ${ev.permission_denials.length} action(s) that aren't allowed yet:\n  ${list}\nUse the Allow button below to permit them and let it continue.`;
+    const o = Output.parseClaudeEvent(ev);
+    if (o.sessionId) sessionId = o.sessionId;
+    for (const line of o.progress) pushProgress(line);
+    if (o.result !== null) {
+      isError = o.isError;
+      resultText = o.result;
+      denied = o.denied;
+      if (o.denials.length) {
+        const list = o.denials.map(d => d.tool_name + (d.tool_input && d.tool_input.command ? ': ' + d.tool_input.command : '')).join('\n  ');
+        resultText += `\n\n[bridge] ${prov.label} needed ${o.denials.length} action(s) that aren't allowed yet:\n  ${list}\nUse the Allow button below to permit them and let it continue.`;
       }
     }
   };
+
+  // jsonl-text: the muse CLI's JSONL event stream (see output.parseMuseEvent).
+  const feedJsonl = (line) => {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    const o = Output.parseMuseEvent(ev);
+    if (o.sessionId) sessionId = o.sessionId;
+    if (o.result !== null) { resultText = o.result; return; }
+    if (o.text && o.text !== lastChunk) {
+      lastChunk = o.text;
+      museText += o.text;
+      const snippet = o.text.replace(/\s+/g, ' ');
+      pushProgress(snippet.length > 140 ? snippet.slice(0, 140) + '...' : snippet);
+    }
+  };
+
+  // text: plain stdout accumulation (grok-local, zcode, harness).
+  const feedText = (line) => {
+    outText += line + '\n';
+    if (line) pushProgress(line.length > 140 ? line.slice(0, 140) + '...' : line);
+  };
+
+  const feedLine = prov.outputMode === 'stream-json'
+    ? (line) => { try { handleEvent(JSON.parse(line)); } catch {} }
+    : prov.outputMode === 'jsonl-text' ? feedJsonl : feedText;
 
   child.stdout.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
@@ -496,7 +568,7 @@ function runJob(job) {
       const line = buffer.slice(0, nl).trim();
       buffer = buffer.slice(nl + 1);
       if (!line) continue;
-      try { handleEvent(JSON.parse(line)); } catch {}
+      feedLine(line);
     }
   });
   child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
@@ -509,18 +581,88 @@ function runJob(job) {
   child.on('error', (err) => {
     clearTimeout(timer);
     clearInterval(keepalive);
-    finish(job, 'error', `Could not start claude: ${err.message}\nSet "claudePath" in config.json.`);
+    if (promptFile) { try { fs.unlinkSync(promptFile); } catch {} }
+    finish(job, 'error', `Could not start ${prov.label} (${prov.command(cfg)}): ${err.message}\nSet provider.path in config.json.`);
   });
 
   child.on('close', (code) => {
     clearTimeout(timer);
     clearInterval(keepalive);
-    if (buffer.trim()) { try { handleEvent(JSON.parse(buffer.trim())); } catch {} }
-    if (sessionId) { state.sessions[skey] = sessionId; (state.sessionCwd = state.sessionCwd || {})[skey] = cwd; }
+    if (promptFile) { try { fs.unlinkSync(promptFile); } catch {} }
+    if (buffer.trim()) feedLine(buffer.trim());
+    if (prov.outputMode === 'text' && resultText === null) resultText = outText.trim() || null;
+    if (prov.outputMode === 'jsonl-text' && resultText === null) resultText = museText.trim() || null;
+    if (sessionId && prov.supportsResume) { state.sessions[skey] = sessionId; (state.sessionCwd = state.sessionCwd || {})[skey] = cwd; }
     if (resultText !== null && !isError) finish(job, 'done', resultText, sessionId, denied);
     else if (resultText !== null) finish(job, 'error', resultText, sessionId, denied);
-    else finish(job, 'error', `claude exited with code ${code} and no result.\n${stderr.trim().slice(-1500)}`, sessionId);
+    else finish(job, 'error', `${prov.label} exited with code ${code} and no result.\n${stderr.trim().slice(-1500)}`, sessionId);
   });
+}
+
+// HTTP providers: POST /v1/chat/completions (OpenAI-compatible). Used by the
+// lmstudio preset and any configured openai-compat endpoint. No sessions.
+function runHttpJob(job, prov, ctx) {
+  const { key, tag, cwd, model, sys } = ctx;
+  const ep = prov.endpoint(cfg);
+  if (!ep.baseUrl) {
+    running.delete(key);
+    finish(job, 'error', `HTTP provider '${prov.id}' needs provider.http.baseUrl in config.json.`);
+    return;
+  }
+  if (!ep.model) {
+    running.delete(key);
+    finish(job, 'error', `HTTP provider '${prov.id}' needs a model: set provider.model or provider.http.model in config.json (no model IDs are built in).`);
+    return;
+  }
+  const base = String(ep.baseUrl).replace(/\/+$/, '');
+  const url = new URL(base + '/v1/chat/completions');
+  const httpMod = url.protocol === 'https:' ? require('https') : require('http');
+  const body = Buffer.from(JSON.stringify({
+    model: ep.model,
+    messages: [...(sys ? [{ role: 'system', content: sys }] : []),
+      { role: 'user', content: job.text }],
+    stream: false,
+  }), 'utf8');
+  log(`${tag} (${job.via}) [${prov.id}] POST ${base} model=${ep.model}`);
+  publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'thinking...', cwd, session: '' }, true);
+  const beatTimer = setInterval(() => beat(job), 45000);
+  const timeoutMs = ep.timeoutMs || 120000;
+  const req = httpMod.request(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': body.length,
+      ...(ep.apiKey ? { Authorization: 'Bearer ' + ep.apiKey } : {}),
+    },
+  }, res => {
+    let raw = '';
+    res.setEncoding('utf8');
+    res.on('data', c => { raw += c; });
+    res.on('end', () => {
+      clearInterval(beatTimer);
+      running.delete(key);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        finish(job, 'error', `${prov.label} HTTP ${res.statusCode}: ${raw.slice(0, 1500)}`);
+        return;
+      }
+      try {
+        const data = JSON.parse(raw);
+        const content = data.choices && data.choices[0] && data.choices[0].message
+          && data.choices[0].message.content;
+        if (typeof content === 'string' && content.trim()) finish(job, 'done', content, '', []);
+        else finish(job, 'error', `${prov.label}: empty reply.\n${raw.slice(0, 1500)}`, '');
+      } catch (e) {
+        finish(job, 'error', `${prov.label}: bad JSON (${e.message}).\n${raw.slice(0, 1500)}`, '');
+      }
+    });
+  });
+  req.on('error', e => {
+    clearInterval(beatTimer);
+    running.delete(key);
+    finish(job, 'error', `${prov.label}: request failed (${e.message}). Is the endpoint up at ${base}?`, '');
+  });
+  req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout')));
+  req.end(body);
 }
 
 function finish(job, status, text, session, denied) {
@@ -529,7 +671,7 @@ function finish(job, status, text, session, denied) {
   running.delete(chatKey(job));
   markHandled(job);
   saveState();
-  noteMessage(job, status === 'done' ? 'claude' : 'system', status === 'done' ? text : 'Bridge error: ' + text);
+  noteMessage(job, status === 'done' ? 'muse' : 'system', status === 'done' ? text : 'Bridge error: ' + text);
   publish(chatKey(job), { chat: job.chat, id: job.id, status, text, cwd: job.cwd, session, denied }, true);
   signal('sig', job.id, true);
   log(`#${job.id}${job.session ? '@' + job.session : ''} ${status} (${text.length} chars)`);
@@ -577,19 +719,19 @@ function startCapture() {
 }
 
 function banner() {
-  console.log('WoW Claude bridge');
-  console.log(`  folder   : ${DEFAULT_CWD}  (${DEFAULT_CWD_SOURCE}; chats can override with /wow-claude cd)`);
+  console.log('WoW Muse bridge');
+  console.log(`  folder   : ${DEFAULT_CWD}  (${DEFAULT_CWD_SOURCE}; chats can override with /wow-muse cd)`);
   console.log(`  addons   : ${cfg.addonDir}`);
   console.log(`  addon    : ${addonInstalled() ? 'installed' : 'NOT INSTALLED - run: node setup.js, then restart WoW'}`);
   console.log(`  slots    : ${slotsInstalled() ? SLOTS + ' installed' : 'NOT INSTALLED - run: node setup.js (or node bridge/install-slots.js), then restart WoW'}`);
   console.log(`  capture  : ${cap.enabled ? 'on (' + cap.processName + ', ' + cap.cellsPerRow + 'x' + cap.maxRows + ' cells of ' + cap.cellPx + 'px)' : 'off'}`);
   console.log(`  parallel : up to ${MAX_PARALLEL} chats at once`);
   console.log(`  fallback : ${cfg.savedVariablesFile}`);
-  console.log(`  claude   : ${resolveClaude()}`);
+  console.log(`  provider : ${resolveProviderId()}${providerModel(null) ? ' (' + providerModel(null) + ')' : ''}`);
   console.log(`  mode     : ${cfg.permissionMode}, ${(cfg.allowedTools || []).length} allowed tool rules`);
   console.log(`  sessions : ${Object.keys(state.sessions).length} saved`);
   const ctx = gameContext();
-  console.log(`  context  : ${cfg.gameContext === false ? 'off (gameContext in config.json)' : ctx ? (ctx.split('\n').find(l => /^Character:/i.test(l)) || ctx.split('\n')[0]).slice(0, 100) : 'none yet (the addon sends it with its hello; /wow-claude context in game)'}`);
+  console.log(`  context  : ${cfg.gameContext === false ? 'off (gameContext in config.json)' : ctx ? (ctx.split('\n').find(l => /^Character:/i.test(l)) || ctx.split('\n')[0]).slice(0, 100) : 'none yet (the addon sends it with its hello; /wow-muse context in game)'}`);
   console.log(`  primer   : ${!PRIMER_FILE ? 'off (primerFile in config.json)' : primer() ? path.resolve(REPO, PRIMER_FILE) + ' (' + primer().length + ' chars, with the context)' : 'NOT FOUND: ' + path.resolve(REPO, PRIMER_FILE)}`);
   console.log('Leave this window open while you play. Ctrl+C to stop.\n');
 }

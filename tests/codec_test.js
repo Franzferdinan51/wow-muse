@@ -1,12 +1,24 @@
 // Round-trip test: the addon's real Codec.lua (run in a Lua VM) -> PNG -> capture.ps1 decoder.
 // Windows only (the decoder is PowerShell). Simulates game rendering with noise and gamma.
+// On other platforms the decode half can't run, so this test skips (exit 0).
 'use strict';
 const fengari = require('fengari');
 const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari;
 const fs = require('fs'), path = require('path'), zlib = require('zlib');
-const { execFileSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 
-const CODEC = path.join(__dirname, '..', 'addon', 'WoWClaude', 'Codec.lua');
+function hasPowerShell() {
+  try {
+    execSync('powershell.exe -NoProfile -Command "exit 0"', { stdio: 'ignore', timeout: 15000 });
+    return true;
+  } catch { return false; }
+}
+if (process.platform !== 'win32' && !hasPowerShell()) {
+  console.log('>>> CODEC ROUND-TRIP SKIP (needs Windows PowerShell)');
+  process.exit(0);
+}
+
+const CODEC = path.join(__dirname, '..', 'addon', 'WoWMuse', 'Codec.lua');
 const CAPTURE = path.join(__dirname, '..', 'bridge', 'capture.ps1');
 const TMP = path.join(__dirname, 'tmp');
 const CELL = 4, CELLS = 200, MAXROWS = 48;
@@ -18,7 +30,7 @@ function encodeWithLua(id, payload) {
   const L = lauxlib.luaL_newstate();
   lualib.luaL_openlibs(L);
   const code = fs.readFileSync(CODEC, 'utf8') +
-    `\nlocal cells, n = WoWClaude_Codec.Encode(${id}, ${lit})\n` +
+    `\nlocal cells, n = WoWMuse_Codec.Encode(${id}, ${lit})\n` +
     `local t = {}\nfor i = 1, #cells do t[i] = string.format("%d", cells[i]) end\n` +
     `RESULT = table.concat(t, ",")\n`;
   if (lauxlib.luaL_dostring(L, to_luastring(code)) !== 0) {

@@ -1,7 +1,7 @@
 {
   "addonDir": "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns",
-  "savedVariablesFile": "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\WTF\\Account\\YOUR_ACCOUNT\\SavedVariables\\WoWClaude.lua",
-  "inboxFile": "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns\\WoWClaude\\Inbox.lua",
+  "savedVariablesFile": "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\WTF\\Account\\YOUR_ACCOUNT\\SavedVariables\\WoWMuse.lua",
+  "inboxFile": "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns\\WoWMuse\\Inbox.lua",
   "defaultCwd": "C:\\path\\to\\your\\project",
   "tocInterface": "16001",
   "slots": 200,
@@ -18,7 +18,29 @@
     "intervalMs": 250
   },
   "claudePath": "",
-  "model": "",
+  "provider": {
+    "id": "muse",
+    "path": "",
+    "model": "",
+    "harnessProvider": "",
+    "http": {
+      "baseUrl": "",
+      "apiKey": "",
+      "model": "",
+      "timeoutMs": 120000
+    }
+  },
+  "systemone": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "timeoutMs": 3000,
+    "tierMap": {
+      "economy": { "provider": "lmstudio" },
+      "balanced": { "provider": "grok-local" },
+      "heavy": { "provider": "muse" }
+    }
+  },
   "gameContext": true,
   "primerFile": "docs/WOW-ADDON-PRIMER.md",
   "permissionMode": "acceptEdits",

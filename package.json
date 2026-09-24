@@ -1,13 +1,13 @@
 {
-  "name": "wow-claude",
-  "version": "0.3.0",
+  "name": "wow-muse",
+  "version": "0.4.0",
   "private": true,
   "description": "Chat with local Claude Code sessions from inside World of Warcraft: Forever, with no UI reloads. Pixel strip out, load-on-demand slots in.",
   "license": "MIT",
   "author": "chelinho139",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chelinho139/wow-claude"
+    "url": "https://github.com/chelinho139/wow-muse"
   },
   "keywords": [
     "world-of-warcraft",
@@ -20,13 +20,13 @@
     "node": ">=22.2"
   },
   "bin": {
-    "wow-claude": "bridge/supervisor.js"
+    "wow-muse": "bridge/supervisor.js"
   },
   "scripts": {
     "setup": "node setup.js",
     "start": "node bridge/supervisor.js",
     "slots": "node bridge/install-slots.js",
-    "test": "node tests/order_check.js && node --test tests/bridge_test.js tests/restore_test.js tests/addon_test.js && node tests/codec_test.js",
+    "test": "node tests/order_check.js && node --test tests/bridge_test.js tests/restore_test.js tests/addon_test.js tests/providers_test.js && node tests/codec_test.js",
     "test:live": "node tests/inject_test.js"
   },
   "devDependencies": {

@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: WoW Muse
+## Notes: Chat with your local AI agents from inside the game. Needs the companion bridge (see README).
+## Author: chelinho139
+## Version: 0.4.0
+## SavedVariables: WoWMuseDB
+
+Codec.lua
+Inbox.lua
+WoWMuse.lua
