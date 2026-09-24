@@ -10,7 +10,7 @@
 //   grok-local     Grok CLI (`grok-local -p <prompt> ...`)
 //   zcode          ZCode local CLI (`zcode -p <prompt> --mode ...`)
 //   harness        Custom-Code-Harness `ch` CLI (`ch run --print <prompt>`)
-//   claude         Anthropic's Claude Code CLI (the original backend)
+//   claude         Anthropic's Claude Code CLI (legacy; explicit selection only)
 //   lmstudio       Local LM Studio, OpenAI-compatible HTTP preset (127.0.0.1:1234)
 //   openai-compat  Any OpenAI-compatible HTTP endpoint (baseUrl/apiKey/model from config)
 //
@@ -210,18 +210,19 @@ function list() {
 
 // Resolve the effective provider id from config.
 // Default is 'muse'; a legacy claudePath with no provider block keeps the old
-// 'claude' behavior. When nothing was configured explicitly and the muse CLI
-// can't be found, fall back to 'claude' with a note (old installs keep working).
-// An explicit or routed choice is honored as-is; unknown ids return the id with
-// a note so the caller can fail loudly.
+// 'claude' behavior. If the muse CLI can't be found, the id stays 'muse' and a
+// note is returned — the caller fails loudly instead of silently switching to
+// a backend the user didn't pick (we don't run Claude here). An explicit or
+// routed choice is honored as-is; unknown ids return the id with a note so the
+// caller can fail loudly.
 function resolveId(cfg) {
   cfg = cfg || {};
   const p = cfg.provider || {};
-  const explicit = !!p.id;
   const id = p.id || (cfg.claudePath ? 'claude' : 'muse');
   if (!PROVIDERS[id]) return { id, note: `unknown provider '${id}'` };
-  if (id === 'muse' && !explicit && !p.path && !localBinFind('muse')) {
-    return { id: 'claude', note: 'muse CLI not found; falling back to claude (set provider.path or install the muse CLI)' };
+  if (id === 'muse' && !p.path && !localBinFind('muse')) {
+    const others = list().filter(x => x.id !== 'muse').map(x => x.id).join(', ');
+    return { id, note: `muse CLI not found on PATH (checked %UserProfile%\\.local\\bin too). Install it ('muse login'), set provider.path in config.json, or pick another provider id: ${others}.` };
   }
   return { id, note: null };
 }

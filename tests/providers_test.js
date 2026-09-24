@@ -21,21 +21,26 @@ test('get() returns null for unknown providers', () => {
   assert.equal(Providers.get('nope'), null);
 });
 
-test('default is muse, falling back to claude when the muse CLI is missing', () => {
+test('default is muse; missing muse CLI fails loudly instead of silently switching backends', () => {
   const saved = process.env.PATH;
   process.env.PATH = '/nonexistent-dir-for-wow-muse-test';
   try {
     const r = Providers.resolveId({});
-    assert.equal(r.id, 'claude');
-    assert.match(r.note, /falling back/i);
-    // An explicit muse id is honored as-is (no silent rewrite).
-    const explicit = Providers.resolveId({ provider: { id: 'muse' } });
-    assert.equal(explicit.id, 'muse');
-    assert.equal(explicit.note, null);
+    assert.equal(r.id, 'muse');
+    assert.match(r.note, /muse CLI not found/);
+    assert.match(r.note, /pick another provider id/);
+    // An explicit provider.path suppresses the missing-CLI note.
+    const withPath = Providers.resolveId({ provider: { id: 'muse', path: 'C:\\tools\\muse.exe' } });
+    assert.equal(withPath.id, 'muse');
+    assert.equal(withPath.note, null);
     // Legacy claudePath keeps the claude provider with no provider block.
     const legacy = Providers.resolveId({ claudePath: '/tmp/claude' });
     assert.equal(legacy.id, 'claude');
     assert.equal(legacy.note, null);
+    // Unknown ids are reported so the caller can fail loudly.
+    const unknown = Providers.resolveId({ provider: { id: 'nope' } });
+    assert.equal(unknown.id, 'nope');
+    assert.match(unknown.note, /unknown provider/);
   } finally {
     process.env.PATH = saved;
   }

@@ -204,8 +204,8 @@ function atomicWrite(file, content) {
 
 // Resolve the active provider for this run: SystemOne's advisory routing first
 // (router decision), then the tier map / config, then explicit user config.
-// The default provider is 'muse', with a logged fallback to 'claude' when the
-// muse CLI isn't installed, so existing setups keep working untouched.
+// The default provider is 'muse'. If its CLI isn't installed, the run fails
+// loudly with setup guidance — the bridge never silently switches backends.
 let providerFallbackNote = null;
 function resolveProviderId() {
   const { id, note } = Providers.resolveId(cfg);

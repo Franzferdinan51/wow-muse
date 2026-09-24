@@ -2,11 +2,13 @@
 'use strict';
 // One-shot installer.
 //
-//   node setup.js [--wow "<client folder>"] [--project "<default work folder>"] [--account <name>]
+//   node setup.js [--wow "<client folder>"] [--project "<default work folder>"] [--account <name>] [--provider <id>]
 //
 // Finds the WoW: Forever client, copies the addon into Interface\AddOns, writes
 // bridge/config.json from the example (if missing), and builds the slot pool.
-// Re-running is safe: existing config and generated files are kept.
+// --provider picks the agent backend (muse, grok-local, zcode, harness,
+// lmstudio, muse-http, openai-compat; claude is legacy). Re-running is safe:
+// existing config and generated files are kept.
 
 const fs = require('fs');
 const os = require('os');
@@ -83,6 +85,13 @@ function writeConfig(client, account) {
   cfg.inboxFile = path.join(cfg.addonDir, 'WoWMuse', 'Inbox.lua');
   cfg.savedVariablesFile = path.join(client, 'WTF', 'Account', account, 'SavedVariables', 'WoWMuse.lua');
   cfg.defaultCwd = args.project ? path.resolve(args.project) : process.cwd();
+  if (args.provider) {
+    const valid = ['muse', 'grok-local', 'zcode', 'harness', 'lmstudio', 'muse-http', 'openai-compat', 'claude'];
+    if (!valid.includes(args.provider)) throw new Error(`--provider must be one of: ${valid.join(', ')}`);
+    cfg.provider = cfg.provider || {};
+    cfg.provider.id = args.provider;
+    console.log(`provider : ${args.provider}`);
+  }
   const exe = fs.readdirSync(client).find(f => /^Wow.*\.exe$/i.test(f));
   if (exe) cfg.capture.processName = exe.replace(/\.exe$/i, '');
   fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2) + '\n');

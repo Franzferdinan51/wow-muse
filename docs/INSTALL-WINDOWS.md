@@ -10,7 +10,7 @@ A start-to-finish walkthrough for a fresh Windows machine, ending with the `wow-
 | World of Warcraft: Forever, **windowed or borderless** | Options → Graphics → Display Mode | Exclusive fullscreen blocks screen capture, so the bridge can't see your messages |
 | Node.js 22.2 or newer | `node -v` prints `v22.x` or higher | [nodejs.org](https://nodejs.org), the LTS installer; tick "Add to PATH" (default) |
 | Git | `git --version` | [git-scm.com](https://git-scm.com/download/win) |
-| An agent backend, logged in | `muse` **or** `claude` **or** `grok-local` **or** `zcode-local` **or** `ch` on `PATH`, **or** LM Studio serving on `127.0.0.1:1234` | Meta Muse is the default (`muse login` or `META_API_KEY`); Claude Code, grok-local, ZCode, Custom-Code-Harness and LM Studio all work too — see the README's [Backends](../README.md#backends) |
+| An agent backend, logged in | `muse` **or** `grok-local` **or** `zcode-local` **or** `ch` on `PATH`, **or** LM Studio serving on `127.0.0.1:1234` (`claude` works too, legacy) | Meta Muse is the default (`muse login` or `META_API_KEY`); grok-local, ZCode, Custom-Code-Harness and LM Studio all work too — see the README's [Backends](../README.md#backends) |
 
 Open a new terminal after installing Node or Git so the `PATH` change is picked up. Any terminal works: Windows Terminal, PowerShell, cmd, or Git Bash.
 
@@ -131,7 +131,7 @@ or type `wow-muse.cmd` instead, which bypasses the policy.
 
 **The banner says `slots : NOT INSTALLED`.** `setup.js` couldn't write into the AddOns folder, or it wrote somewhere else. Check `addonDir` in `bridge\config.json`, then run `node bridge\install-slots.js` and relaunch the game.
 
-**`Could not start <backend>`.** The bridge looks for the provider's executable on the `PATH` (and in `%UserProfile%\.local\bin`). If yours lives elsewhere, put the full path in `provider.path` in `bridge\config.json` (the old `claudePath` key still works for Claude Code). If you picked `muse` but the CLI isn't installed, the bridge falls back to `claude` and says so in the log.
+**`Could not start <backend>`.** The bridge looks for the provider's executable on the `PATH` (and in `%UserProfile%\.local\bin`). If yours lives elsewhere, put the full path in `provider.path` in `bridge\config.json` (the old `claudePath` key still selects the legacy Claude Code provider). If the executable isn't found, the run fails with a message listing the available backends — the bridge never silently switches you to a different one.
 
 **The light stays red / "no sign of the bridge".** The bridge can't see the strip in the top-left corner of the game window. In order of likelihood: the game is in exclusive fullscreen (switch to windowed or borderless); the game window is minimized or on a monitor the bridge can't capture; `capture.processName` in the config doesn't match your game exe (`WowB` for Forever; `setup.js` sets it from the exe it finds). `bridge\bridge.log` prints `attached to '...'` when it finds the window and `strip #N` when it decodes a message.
 

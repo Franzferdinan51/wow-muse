@@ -141,14 +141,14 @@ The bridge doesn't care which agent does the work — it speaks to a provider, a
 | `grok-local` | `grok-local -p` | Plain-text one-shot; supports `--resume`, `--model`, `--allow`, `--rules`. |
 | `zcode` | `zcode-local -p` | Plain-text one-shot; the bridge's `permissionMode` maps to `--mode build\|edit\|plan\|yolo`. Supports `--resume`. |
 | `harness` | `ch run <prompt> --print` | Custom-Code-Harness one-shot; optional `harnessProvider` selects its provider. |
-| `claude` | `claude -p --output-format stream-json` | The original backend. Kept for backward compatibility — a legacy `claudePath` config still selects it. |
+| `claude` | `claude -p --output-format stream-json` | **Legacy.** The original backend — only runs when explicitly selected (or via a legacy `claudePath` config). |
 | `lmstudio` | `POST http://127.0.0.1:1234/v1/chat/completions` | LM Studio preset; set `provider.model` to the loaded model. |
 | `muse-http` | your Muse-compatible OpenAI endpoint | Set `provider.http.baseUrl` (+ `apiKey`, `model`); nothing is assumed about the URL. |
 | `openai-compat` | any OpenAI-compatible endpoint | Same as `muse-http` without the Muse branding. |
 
 `path` overrides the executable that is launched (for the CLI providers); `model` is passed through where the CLI supports it. No model IDs are built in — the model always comes from your config or from the router below.
 
-If the default `muse` is selected but the CLI isn't installed, the bridge logs a note and falls back to `claude` so existing setups keep working. An explicit `id` is honored as-is: if the binary is missing, the run fails loudly instead of silently switching.
+If the selected backend's executable isn't installed, the run fails loudly with setup guidance (which backends are available and how to point at yours) — the bridge never silently switches you to a different backend. A legacy `claudePath` config still selects the `claude` provider for old installs.
 
 ### SystemOne routing (optional)
 
