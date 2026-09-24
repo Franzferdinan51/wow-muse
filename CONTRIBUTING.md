@@ -27,7 +27,7 @@ Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first. The two transports (pix
 ## Setting up for development
 
 ```powershell
-git clone https://github.com/chelinho139/wow-muse
+git clone https://github.com/Franzferdinan51/wow-muse
 cd wow-muse
 npm install          # test tooling only: fengari (Lua VM) and luaparse
 npm test

@@ -31,7 +31,7 @@ WoW addons are sandboxed: no network, no file reads at runtime. Two doors remain
 Step-by-step for a fresh machine, with troubleshooting: [docs/INSTALL-WINDOWS.md](docs/INSTALL-WINDOWS.md). The short version:
 
 ```powershell
-git clone https://github.com/chelinho139/wow-muse
+git clone https://github.com/Franzferdinan51/wow-muse
 cd wow-muse
 node setup.js --project "C:\path\to\the\project\you\want\to\work\on"
 ```
@@ -139,12 +139,19 @@ The bridge doesn't care which agent does the work — it speaks to a provider, a
 |---|---|---|
 | `muse` | Meta Muse CLI (`muse exec --json ...`) | Default. Prompt goes through a temp file; JSONL output is parsed best-effort. Needs `muse login` or `META_API_KEY`. |
 | `grok-local` | `grok-local -p` | Plain-text one-shot; supports `--resume`, `--model`, `--allow`, `--rules`. |
+| `grok` | `grok -p` (official Grok Build CLI) | **Calls xAI's cloud**, unlike `grok-local` (local LM Studio). Needs the CLI's OAuth login; supports `--resume`, `--rules`, `--allow`. |
 | `zcode` | `zcode-local -p` | Plain-text one-shot; the bridge's `permissionMode` maps to `--mode build\|edit\|plan\|yolo`. Supports `--resume`. |
 | `harness` | `ch run <prompt> --print` | Custom-Code-Harness one-shot; optional `harnessProvider` selects its provider. |
-| `claude` | `claude -p --output-format stream-json` | **Legacy.** The original backend — only runs when explicitly selected (or via a legacy `claudePath` config). |
+| `hermes` | `hermes -z` | Hermes agent one-shot, plain text; the session id is recovered from `--usage-file` so `--resume` keeps working. Experimental — a live smoke test needs a model loaded and none was available during testing. |
+| `openclaw` | `openclaw agent --local -m` | OpenClaw one-shot against the local model; supports `--session-id` resume. Verified live on Windows (`openclaw agent --local -m "Reply with exactly: OK"` → `OK`); on the Mac it may need its plugin issues resolved first (a stale discord plugin blocked the CLI there). |
+| `codex` | `codex exec --json` | OpenAI Codex CLI; JSONL events are parsed (session, text, progress, errors). Supports `exec resume --json`. |
+| `gemini` | `gemini --output-format stream-json -p` | Google Gemini CLI; stream-json events are parsed. No resume (the CLI's `--resume` targets the latest/latest-index session only). |
+| `opencode` | `opencode run --format json` | OpenCode one-shot; JSON events are parsed. Supports `--session` resume. |
+| `mcode` | `mcode exec --output-format stream-json` | MiniMax Code; stream-json events are parsed. Supports `--session` resume. |
 | `lmstudio` | `POST http://127.0.0.1:1234/v1/chat/completions` | LM Studio preset; set `provider.model` to the loaded model. |
 | `muse-http` | your Muse-compatible OpenAI endpoint | Set `provider.http.baseUrl` (+ `apiKey`, `model`); nothing is assumed about the URL. |
 | `openai-compat` | any OpenAI-compatible endpoint | Same as `muse-http` without the Muse branding. |
+| `claude` | `claude -p --output-format stream-json` | **Legacy.** The original backend — only runs when explicitly selected (or via a legacy `claudePath` config). |
 
 `path` overrides the executable that is launched (for the CLI providers); `model` is passed through where the CLI supports it. No model IDs are built in — the model always comes from your config or from the router below.
 
@@ -196,6 +203,8 @@ Layout: `addon/WoWMuse` is the addon, `bridge/` the companion (`bridge.js` does 
 
 ## Credits
 
+- [chelinho139](https://github.com/chelinho139), the original **WoW Claude** author — this project began as a fork/evolution of WoW Claude. See [NOTICE.md](NOTICE.md).
+- [ZCode](https://github.com/Franzferdinan51/ZCode) — the headless invocation shapes and event vocabularies for the `codex`, `gemini`, `opencode`, `mcode` and `hermes` backends follow ZCode's harness driver table (`packages/shared/src/harness-drivers.ts`).
 - [0xInuarashi's wow-forever-codex](https://github.com/0xinuarashi/wow-forever-codex) measured the client's file-loading rules on a live Forever build (files must exist at launch; a not-yet-loaded file is read fresh on first use) and pioneered the pixel-out channel for Codex, with a font-metrics return channel. This project uses the same rules with load-on-demand addons instead of fonts.
 - [Gethe/wow-ui-source](https://github.com/Gethe/wow-ui-source) — Blizzard's UI code, `forever` branch, used to verify every API this addon calls.
 

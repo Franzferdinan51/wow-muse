@@ -12,9 +12,11 @@ const SystemOne = require('../bridge/systemone');
 
 // ---------------------------------------------------------------- registry
 
-test('registry lists all seven backends', () => {
+test('registry lists all fifteen backends', () => {
   const ids = Providers.list().map(p => p.id).sort();
-  assert.deepEqual(ids, ['claude', 'grok-local', 'harness', 'lmstudio', 'muse', 'muse-http', 'openai-compat', 'zcode'].sort());
+  assert.deepEqual(ids, ['claude', 'codex', 'gemini', 'grok', 'grok-local', 'harness',
+    'hermes', 'lmstudio', 'mcode', 'muse', 'muse-http', 'opencode', 'openai-compat',
+    'openclaw', 'zcode'].sort());
 });
 
 test('get() returns null for unknown providers', () => {
@@ -121,6 +123,87 @@ test('harness provider runs one-shot with --print', () => {
   assert.deepEqual(args, ['run', 'hi', '--print', '--provider', 'hp', '--model', 'hm']);
 });
 
+test('grok provider uses the official Grok Build CLI headless flags', () => {
+  const p = Providers.get('grok');
+  assert.equal(p.promptVia, 'arg');
+  assert.equal(p.outputMode, 'text');
+  assert.equal(p.supportsResume, true);
+  const args = p.buildArgs({
+    text: 'hi', systemPrompt: 'SYS', resume: 'abc', model: '',
+    allowedTools: ['Edit'], permissionMode: 'acceptEdits', cwd: '/w', cfg: {},
+  });
+  assert.deepEqual(args, ['-p', 'hi', '--output-format', 'plain',
+    '--allow', 'Edit', '-r', 'abc', '--rules', 'SYS', '--cwd', '/w']);
+  // no model flag is passed (this build has no --model)
+  const bare = p.buildArgs({ text: 'hi', cfg: {} });
+  assert.deepEqual(bare, ['-p', 'hi', '--output-format', 'plain']);
+});
+
+test('hermes provider uses -z one-shot with optional --resume', () => {
+  const p = Providers.get('hermes');
+  assert.equal(p.promptVia, 'arg');
+  assert.equal(p.outputMode, 'text');
+  assert.equal(p.supportsResume, true);
+  assert.equal(p.usageFileFlag, '--usage-file');
+  assert.equal(p.parseUsageReport({ session_id: 'h1' }).sessionId, 'h1');
+  assert.equal(p.parseUsageReport({}).sessionId, null);
+  assert.deepEqual(p.buildArgs({ text: 'hi', resume: 'h1', cfg: {} }),
+    ['--resume', 'h1', '-z', 'hi']);
+  assert.deepEqual(p.buildArgs({ text: 'hi', cfg: {} }), ['-z', 'hi']);
+});
+
+test('openclaw provider uses agent --local -m with optional session/model', () => {
+  const p = Providers.get('openclaw');
+  assert.equal(p.promptVia, 'arg');
+  assert.equal(p.outputMode, 'text');
+  assert.equal(p.supportsResume, true);
+  assert.deepEqual(p.buildArgs({ text: 'hi', resume: 's1', model: 'mm', cfg: {} }),
+    ['agent', '--local', '-m', 'hi', '--session-id', 's1', '--model', 'mm']);
+  assert.deepEqual(p.buildArgs({ text: 'hi', cfg: {} }),
+    ['agent', '--local', '-m', 'hi']);
+});
+
+test('codex provider uses exec --json, resume via exec resume', () => {
+  const p = Providers.get('codex');
+  assert.equal(p.promptVia, 'arg');
+  assert.equal(p.outputMode, 'codex-json');
+  assert.equal(p.supportsResume, true);
+  assert.deepEqual(p.buildArgs({ text: 'hi', cfg: {} }), ['exec', '--json', 'hi']);
+  assert.deepEqual(p.buildArgs({ text: 'hi', resume: 't1', cfg: {} }),
+    ['exec', 'resume', '--json', 't1', 'hi']);
+});
+
+test('gemini provider uses stream-json and does not resume', () => {
+  const p = Providers.get('gemini');
+  assert.equal(p.promptVia, 'arg');
+  assert.equal(p.outputMode, 'gemini-json');
+  assert.equal(p.supportsResume, false);
+  assert.deepEqual(p.buildArgs({ text: 'hi', cfg: {} }),
+    ['--output-format', 'stream-json', '-p', 'hi']);
+});
+
+test('opencode provider uses run --format json with optional session/model', () => {
+  const p = Providers.get('opencode');
+  assert.equal(p.promptVia, 'arg');
+  assert.equal(p.outputMode, 'opencode-json');
+  assert.equal(p.supportsResume, true);
+  assert.deepEqual(p.buildArgs({ text: 'hi', resume: 's1', model: 'mm', cfg: {} }),
+    ['run', '--session', 's1', '--model', 'mm', '--format', 'json', 'hi']);
+  assert.deepEqual(p.buildArgs({ text: 'hi', cfg: {} }),
+    ['run', '--format', 'json', 'hi']);
+});
+
+test('mcode provider uses exec --output-format stream-json with optional session', () => {
+  const p = Providers.get('mcode');
+  assert.equal(p.promptVia, 'arg');
+  assert.equal(p.outputMode, 'mcode-json');
+  assert.equal(p.supportsResume, true);
+  assert.deepEqual(p.buildArgs({ text: 'hi', resume: 's1', cfg: {} }),
+    ['exec', '--session', 's1', '--output-format', 'stream-json', 'hi']);
+  assert.deepEqual(p.buildArgs({ text: 'hi', cfg: {} }),
+    ['exec', '--output-format', 'stream-json', 'hi']);
+});
+
 test('no provider hard-codes a model id', () => {
   for (const p of Providers.list()) {
     const full = Providers.get(p.id);
@@ -201,6 +284,112 @@ test('parseMuseEvent: string result is the final answer', () => {
 test('parseMuseEvent: ignores junk', () => {
   assert.equal(Output.parseMuseEvent(null).text, '');
   assert.equal(Output.parseMuseEvent('nope').result, null);
+});
+
+// -------------------------------------- headless harness JSONL parsers
+
+test('codex parser: session, text, progress, terminal', () => {
+  const push = Output.createCodexParser();
+  let o = push({ type: 'thread.started', thread_id: 't-1' });
+  assert.equal(o.sessionId, 't-1');
+  assert.equal(o.text, '');
+  o = push({ type: 'item.completed', item: { type: 'agent_message', text: 'hello' } });
+  assert.equal(o.text, 'hello');
+  assert.equal(o.done, false);
+  o = push({ type: 'item.completed', item: { type: 'command_execution', command: 'ls', status: 'success' } });
+  assert.deepEqual(o.progress, ['ran: ls']);
+  o = push({ type: 'turn.completed' });
+  assert.equal(o.done, true);
+  assert.equal(o.result, null);
+  assert.equal(o.isError, false);
+});
+
+test('codex parser: failed turn is a fatal error', () => {
+  const push = Output.createCodexParser();
+  const o = push({ type: 'turn.failed', message: 'boom' });
+  assert.equal(o.done, true);
+  assert.equal(o.isError, true);
+  assert.equal(o.result, 'boom');
+});
+
+test('codex parser: ignores junk', () => {
+  const push = Output.createCodexParser();
+  assert.deepEqual(push(null).progress, []);
+  assert.deepEqual(push('nope').progress, []);
+  assert.deepEqual(push({ type: 'turn.started' }).progress, []);
+});
+
+test('gemini parser: init session, assistant text, result terminal', () => {
+  const push = Output.createGeminiParser();
+  let o = push({ type: 'init', session_id: 'g-1' });
+  assert.equal(o.sessionId, 'g-1');
+  o = push({ type: 'message', role: 'assistant', content: 'hi there' });
+  assert.equal(o.text, 'hi there');
+  o = push({ type: 'tool_use', tool_name: 'read' });
+  assert.deepEqual(o.progress, ['tool: read']);
+  o = push({ type: 'error', severity: 'warning', message: 'slow' });
+  assert.equal(o.done, false); // warnings are non-fatal
+  assert.ok(o.progress[0].includes('warning'));
+  o = push({ type: 'result', status: 'success', stats: { input_tokens: 3, output_tokens: 4 } });
+  assert.equal(o.done, true);
+  assert.equal(o.isError, false);
+  assert.equal(o.result, null);
+});
+
+test('gemini parser: error result is fatal', () => {
+  const push = Output.createGeminiParser();
+  const o = push({ type: 'result', status: 'error', error: { message: 'quota' } });
+  assert.equal(o.done, true);
+  assert.equal(o.isError, true);
+  assert.equal(o.result, 'quota');
+});
+
+test('opencode parser: session, text, tool, error', () => {
+  const push = Output.createOpencodeParser();
+  let o = push({ type: 'step_start', sessionID: 'o-1', timestamp: 1 });
+  assert.equal(o.sessionId, 'o-1');
+  o = push({ type: 'text', sessionID: 'o-1', part: { text: 'part one' } });
+  assert.equal(o.text, 'part one');
+  assert.equal(o.done, false); // no terminal marker; process exit ends the run
+  o = push({ type: 'tool_use', sessionID: 'o-1', part: { tool: 'bash' } });
+  assert.deepEqual(o.progress, ['tool: bash']);
+  o = push({ type: 'error', sessionID: 'o-1', error: { message: 'bad' } });
+  assert.equal(o.done, true);
+  assert.equal(o.isError, true);
+  assert.equal(o.result, 'bad');
+});
+
+test('mcode parser: deltas stream, completed dedups, terminal', () => {
+  const push = Output.createMcodeParser();
+  let o = push({ type: 'session.started', sessionId: 'm-1' });
+  assert.equal(o.sessionId, 'm-1');
+  o = push({ type: 'item.updated', item: { id: 'i1', type: 'agent_message', contentDelta: 'hel' } });
+  assert.equal(o.text, 'hel');
+  o = push({ type: 'item.updated', item: { id: 'i1', type: 'agent_message', contentDelta: 'lo' } });
+  assert.equal(o.text, 'lo');
+  // item.completed repeats the streamed text: only the unseen suffix is emitted
+  o = push({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', content: 'hello!' } });
+  assert.equal(o.text, '!');
+  o = push({ type: 'exec.completed', result: { status: 'succeeded', output: 'hello! and more' } });
+  assert.equal(o.done, true);
+  assert.equal(o.isError, false);
+  assert.equal(o.text, ' and more'); // unseen suffix beyond streamed text
+});
+
+test('mcode parser: failed turn is fatal', () => {
+  const push = Output.createMcodeParser();
+  const o = push({ type: 'turn.failed', error: { message: 'crashed' } });
+  assert.equal(o.done, true);
+  assert.equal(o.isError, true);
+  assert.equal(o.result, 'crashed');
+});
+
+test('mcode parser: failed exec result is fatal', () => {
+  const push = Output.createMcodeParser();
+  const o = push({ type: 'exec.completed', result: { status: 'failed', error: { message: 'rc=1' } } });
+  assert.equal(o.done, true);
+  assert.equal(o.isError, true);
+  assert.equal(o.result, 'rc=1');
 });
 
 // ------------------------------------------------------- systemone routing

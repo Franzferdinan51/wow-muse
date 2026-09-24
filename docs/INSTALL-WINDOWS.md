@@ -10,7 +10,7 @@ A start-to-finish walkthrough for a fresh Windows machine, ending with the `wow-
 | World of Warcraft: Forever, **windowed or borderless** | Options → Graphics → Display Mode | Exclusive fullscreen blocks screen capture, so the bridge can't see your messages |
 | Node.js 22.2 or newer | `node -v` prints `v22.x` or higher | [nodejs.org](https://nodejs.org), the LTS installer; tick "Add to PATH" (default) |
 | Git | `git --version` | [git-scm.com](https://git-scm.com/download/win) |
-| An agent backend, logged in | `muse` **or** `grok-local` **or** `zcode-local` **or** `ch` on `PATH`, **or** LM Studio serving on `127.0.0.1:1234` (`claude` works too, legacy) | Meta Muse is the default (`muse login` or `META_API_KEY`); grok-local, ZCode, Custom-Code-Harness and LM Studio all work too — see the README's [Backends](../README.md#backends) |
+| An agent backend, logged in | `muse` **or** `grok-local` **or** `grok` (xAI cloud) **or** `zcode-local` **or** `ch` **or** `hermes` **or** `openclaw` **or** `codex` **or** `gemini` **or** `opencode` **or** `mcode` on `PATH`, **or** LM Studio serving on `127.0.0.1:1234` (`claude` works too, legacy) | Meta Muse is the default (`muse login` or `META_API_KEY`); grok-local, the official Grok Build CLI, ZCode, Custom-Code-Harness, Hermes, OpenClaw, Codex, Gemini, OpenCode, MiniMax Code and LM Studio all work too — see the README's [Backends](../README.md#backends) |
 
 Open a new terminal after installing Node or Git so the `PATH` change is picked up. Any terminal works: Windows Terminal, PowerShell, cmd, or Git Bash.
 
@@ -18,7 +18,7 @@ Open a new terminal after installing Node or Git so the `PATH` change is picked 
 
 ```powershell
 cd C:\Users\<you>\Documents          # or wherever you keep projects
-git clone https://github.com/chelinho139/wow-muse
+git clone https://github.com/Franzferdinan51/wow-muse
 cd wow-muse
 npm install
 ```

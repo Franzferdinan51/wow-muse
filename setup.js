@@ -86,7 +86,7 @@ function writeConfig(client, account) {
   cfg.savedVariablesFile = path.join(client, 'WTF', 'Account', account, 'SavedVariables', 'WoWMuse.lua');
   cfg.defaultCwd = args.project ? path.resolve(args.project) : process.cwd();
   if (args.provider) {
-    const valid = ['muse', 'grok-local', 'zcode', 'harness', 'lmstudio', 'muse-http', 'openai-compat', 'claude'];
+    const valid = ['muse', 'grok-local', 'grok', 'zcode', 'harness', 'hermes', 'openclaw', 'codex', 'gemini', 'opencode', 'mcode', 'lmstudio', 'muse-http', 'openai-compat', 'claude'];
     if (!valid.includes(args.provider)) throw new Error(`--provider must be one of: ${valid.join(', ')}`);
     cfg.provider = cfg.provider || {};
     cfg.provider.id = args.provider;

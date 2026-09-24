@@ -8,11 +8,22 @@
 // Built-in providers:
 //   muse           Meta's Muse Code CLI (`muse exec --json --yolo --prompt-file ...`)
 //   grok-local     Grok CLI (`grok-local -p <prompt> ...`)
+//   grok           Official Grok Build CLI (`grok -p <prompt> ...`) — xAI cloud, NOT local
 //   zcode          ZCode local CLI (`zcode -p <prompt> --mode ...`)
 //   harness        Custom-Code-Harness `ch` CLI (`ch run --print <prompt>`)
+//   hermes         Hermes agent (`hermes -z <prompt>`, plain-text one-shot)
+//   openclaw       OpenClaw (`openclaw agent --local -m <prompt>`)
+//   codex          OpenAI Codex CLI (`codex exec --json <prompt>`)
+//   gemini         Google Gemini CLI (`gemini --output-format stream-json -p <prompt>`)
+//   opencode       OpenCode (`opencode run --format json <prompt>`)
+//   mcode          MiniMax Code (`mcode exec --output-format stream-json <prompt>`)
 //   claude         Anthropic's Claude Code CLI (legacy; explicit selection only)
 //   lmstudio       Local LM Studio, OpenAI-compatible HTTP preset (127.0.0.1:1234)
 //   openai-compat  Any OpenAI-compatible HTTP endpoint (baseUrl/apiKey/model from config)
+//
+// The codex/gemini/opencode/mcode/hermes invocation shapes follow ZCode's
+// headless harness driver table (packages/shared/src/harness-drivers.ts in
+// the ZCode repo) — see NOTICE.md for credit.
 //
 // No model IDs are hard-coded here: models always come from the router's
 // decision, the registry/config, or explicit user config, in that order.
@@ -108,6 +119,28 @@ const PROVIDERS = {
     },
   },
 
+  // Official Grok Build CLI (xAI cloud) — distinct from grok-local, which
+  // routes through local LM Studio. OAuth lives on the user's machines;
+  // WoW-Muse just shells out to the CLI like any other harness.
+  grok: {
+    id: 'grok',
+    label: 'Grok (xAI cloud)',
+    kind: 'cli',
+    promptVia: 'arg',
+    supportsResume: true, // -r <session id> resumes
+    outputMode: 'text',
+    command: cfg => (cfg.provider && cfg.provider.path)
+      || findBinary('grok', [homeBin(), path.join(os.homedir(), '.grok', 'bin')]) || 'grok',
+    buildArgs: ({ text, systemPrompt, resume, allowedTools, cwd }) => {
+      const args = ['-p', text, '--output-format', 'plain'];
+      for (const r of allowedTools || []) args.push('--allow', r);
+      if (resume) args.push('-r', resume);
+      if (systemPrompt) args.push('--rules', systemPrompt);
+      if (cwd) args.push('--cwd', cwd);
+      return args;
+    },
+  },
+
   zcode: {
     id: 'zcode',
     label: 'ZCode',
@@ -143,6 +176,98 @@ const PROVIDERS = {
       if (model) args.push('--model', model);
       return args;
     },
+  },
+
+  hermes: {
+    id: 'hermes',
+    label: 'Hermes',
+    kind: 'cli',
+    promptVia: 'arg',
+    supportsResume: true, // --resume <id> continues the agent session
+    outputMode: 'text',
+    command: cfg => (cfg.provider && cfg.provider.path) || localBinFind('hermes') || 'hermes',
+    buildArgs: ({ text, resume }) => [
+      ...(resume ? ['--resume', resume] : []),
+      '-z', text,
+    ],
+    // Hermes reports the session id (and token usage) through a JSON file it
+    // writes when given --usage-file; the bridge reads it back after the run.
+    usageFileFlag: '--usage-file',
+    parseUsageReport: (json) => ({
+      sessionId: json && typeof json.session_id === 'string' ? json.session_id : null,
+    }),
+  },
+
+  openclaw: {
+    id: 'openclaw',
+    label: 'OpenClaw',
+    kind: 'cli',
+    promptVia: 'arg',
+    supportsResume: true, // --session-id continues the agent session
+    outputMode: 'text',
+    command: cfg => (cfg.provider && cfg.provider.path) || localBinFind('openclaw') || 'openclaw',
+    buildArgs: ({ text, resume, model }) => {
+      const args = ['agent', '--local', '-m', text];
+      if (resume) args.push('--session-id', resume);
+      if (model) args.push('--model', model);
+      return args;
+    },
+  },
+
+  codex: {
+    id: 'codex',
+    label: 'Codex',
+    kind: 'cli',
+    promptVia: 'arg',
+    supportsResume: true, // exec resume --json <id> continues the thread
+    outputMode: 'codex-json',
+    command: cfg => (cfg.provider && cfg.provider.path) || localBinFind('codex') || 'codex',
+    buildArgs: ({ text, resume }) => resume
+      ? ['exec', 'resume', '--json', resume, text]
+      : ['exec', '--json', text],
+  },
+
+  gemini: {
+    id: 'gemini',
+    label: 'Gemini',
+    kind: 'cli',
+    promptVia: 'arg',
+    supportsResume: false, // --resume takes latest|index (unsafe across sessions); each turn is fresh
+    outputMode: 'gemini-json',
+    command: cfg => (cfg.provider && cfg.provider.path) || localBinFind('gemini') || 'gemini',
+    buildArgs: ({ text }) => ['--output-format', 'stream-json', '-p', text],
+  },
+
+  opencode: {
+    id: 'opencode',
+    label: 'OpenCode',
+    kind: 'cli',
+    promptVia: 'arg',
+    supportsResume: true, // --session <id> continues the session
+    outputMode: 'opencode-json',
+    command: cfg => (cfg.provider && cfg.provider.path) || localBinFind('opencode') || 'opencode',
+    buildArgs: ({ text, resume, model }) => {
+      const args = ['run'];
+      if (resume) args.push('--session', resume);
+      if (model) args.push('--model', model);
+      args.push('--format', 'json', text);
+      return args;
+    },
+  },
+
+  mcode: {
+    id: 'mcode',
+    label: 'MiniMax Code',
+    kind: 'cli',
+    promptVia: 'arg',
+    supportsResume: true, // --session <id> resumes
+    outputMode: 'mcode-json',
+    command: cfg => (cfg.provider && cfg.provider.path) || localBinFind('mcode') || 'mcode',
+    buildArgs: ({ text, resume }) => [
+      'exec',
+      ...(resume ? ['--session', resume] : []),
+      '--output-format', 'stream-json', text,
+    ],
   },
 
   claude: {

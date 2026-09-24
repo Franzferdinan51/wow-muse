@@ -490,6 +490,14 @@ async function runJob(job) {
     promptFile, cwd, cfg,
   });
 
+  // Some CLIs report the session id (and usage) through a JSON file they
+  // write when given a flag (hermes --usage-file); read it back on close.
+  let usageFile = null;
+  if (prov.usageFileFlag) {
+    usageFile = path.join(os.tmpdir(), `wow-muse-usage-${job.id}-${Date.now()}.json`);
+    args.push(prov.usageFileFlag, usageFile);
+  }
+
   const env = { ...process.env, ...(prov.extraEnv ? prov.extraEnv(cfg) : {}) };
   delete env.CLAUDECODE;
 
@@ -509,7 +517,20 @@ async function runJob(job) {
   let buffer = '';
   let outText = '';   // outputMode 'text'
   let museText = '';  // outputMode 'jsonl-text'
+  let harnessText = ''; // outputMode 'codex-json' | 'gemini-json' | 'opencode-json' | 'mcode-json'
   let lastChunk = '';
+
+  // Dedicated per-run parsers for the headless harness JSONL protocols
+  // (see output.create*Parser); each push(ev) returns a normalized outcome.
+  const harnessParser = (() => {
+    switch (prov.outputMode) {
+      case 'codex-json': return Output.createCodexParser();
+      case 'gemini-json': return Output.createGeminiParser();
+      case 'opencode-json': return Output.createOpencodeParser();
+      case 'mcode-json': return Output.createMcodeParser();
+      default: return null;
+    }
+  })();
 
   const pushProgress = (line) => {
     progress.push(line);
@@ -557,9 +578,31 @@ async function runJob(job) {
     if (line) pushProgress(line.length > 140 ? line.slice(0, 140) + '...' : line);
   };
 
+  // harness-json: codex/gemini/opencode/mcode JSONL protocols
+  // (see output.create*Parser). Text deltas accumulate into harnessText;
+  // a terminal record (done/result) closes the run, and process exit falls
+  // back to the accumulated text (opencode has no terminal marker).
+  const feedHarnessJson = (line) => {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    const o = harnessParser(ev);
+    if (o.sessionId) sessionId = o.sessionId;
+    for (const p of o.progress) pushProgress(p);
+    if (o.text) {
+      harnessText += o.text;
+      const snippet = o.text.replace(/\s+/g, ' ');
+      pushProgress(snippet.length > 140 ? snippet.slice(0, 140) + '...' : snippet);
+    }
+    if (o.done || o.result !== null) {
+      isError = o.isError;
+      resultText = o.result !== null ? o.result : (harnessText.trim() || null);
+    }
+  };
+
   const feedLine = prov.outputMode === 'stream-json'
     ? (line) => { try { handleEvent(JSON.parse(line)); } catch {} }
-    : prov.outputMode === 'jsonl-text' ? feedJsonl : feedText;
+    : prov.outputMode === 'jsonl-text' ? feedJsonl
+    : harnessParser ? feedHarnessJson : feedText;
 
   child.stdout.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
@@ -592,6 +635,17 @@ async function runJob(job) {
     if (buffer.trim()) feedLine(buffer.trim());
     if (prov.outputMode === 'text' && resultText === null) resultText = outText.trim() || null;
     if (prov.outputMode === 'jsonl-text' && resultText === null) resultText = museText.trim() || null;
+    if (harnessParser && resultText === null) resultText = harnessText.trim() || null;
+    if (usageFile) {
+      // e.g. hermes --usage-file: recover the session id from its report.
+      try {
+        const rep = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
+        const sid = prov.parseUsageReport ? prov.parseUsageReport(rep).sessionId
+          : (rep && typeof rep.session_id === 'string' ? rep.session_id : null);
+        if (sid) sessionId = sid;
+      } catch {}
+      try { fs.unlinkSync(usageFile); } catch {}
+    }
     if (sessionId && prov.supportsResume) { state.sessions[skey] = sessionId; (state.sessionCwd = state.sessionCwd || {})[skey] = cwd; }
     if (resultText !== null && !isError) finish(job, 'done', resultText, sessionId, denied);
     else if (resultText !== null) finish(job, 'error', resultText, sessionId, denied);
